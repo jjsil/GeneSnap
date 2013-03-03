@@ -8,13 +8,41 @@
     android:paddingTop="@dimen/activity_vertical_margin"
     tools:context=".MainActivity" >
 
+    <LinearLayout
+        android:id="@+id/filler"
+        android:layout_width="200dp"
+        android:layout_height="fill_parent"
+        android:orientation="vertical" >
+
+        <TextView
+            android:text="@string/score"
+            android:layout_width="wrap_content"
+            android:textSize="40sp"
+            android:layout_height="wrap_content" />
+        <TextView
+            android:id="@+id/score_txt"
+            android:text="@string/no_score"
+            android:textSize="80sp"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content" />
+    </LinearLayout>
+
     <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="@string/hello_world" />
+        android:id="@+id/loading_txt"
+        android:layout_width="fill_parent"
+        android:layout_height="fill_parent"
+        android:layout_margin="20dp"
+        android:layout_toRightOf="@id/filler"
+        android:gravity="center"
+        android:text="@string/loading"
+        android:textSize="40sp" />
+
     <org.cruk.genesnap.GeneRadarView
-      android:id="@+id/radar"
-      android:layout_width="match_parent"
-      android:layout_height="match_parent"/>
+        android:id="@+id/radar"
+        android:layout_width="fill_parent"
+        android:layout_height="fill_parent"
+        android:layout_margin="20dp"
+        android:layout_toRightOf="@id/filler"
+        android:visibility="gone" />
 
 </RelativeLayout>

@@ -1,21 +1,18 @@
 package org.cruk.genesnap;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.util.Deque;
 import java.util.LinkedList;
-import java.util.regex.Pattern;
+import java.util.List;
 
 import android.content.Context;
 import android.content.res.Resources;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.RectF;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
 import android.util.AttributeSet;
-import android.util.Log;
+import android.view.MotionEvent;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 
@@ -24,55 +21,30 @@ public class GeneRadarView extends SurfaceView implements
 
   private static final String TAG = GeneRadarView.class.getName();
 
+  private static final int ACTION_SCORE = 1;
+  private static final int ACTION_FINISH = 2;
+
+  private static class Selection {
+    public float startOffset;
+    public float endOffset;
+    public float height;
+
+    public Selection(float startOffset, float endOffset, float height) {
+      super();
+      this.startOffset = startOffset;
+      this.endOffset = endOffset;
+      this.height = height;
+    }
+  }
+
   static class GeneRadarThread extends Thread {
 
-    private static final int START_DEGREES = 45;
-    private static final int SWEEP_DEGREES = 90;
+    private static final int TIME_MULTIPLIER = 70;
 
-    private static final int RADAR_MARGIN = -50;
-    private static final int RADAR_INNER_RADIUS = 100;
+    private static final float POS_CONVERSION_FACTOR = 0.00002f;
 
-    private static final int TIME_MULTIPLIER = 4;
-
-    private static final float POS_TO_DEGREE_CONVERSION_FACTOR = 0.000002f;
-
-    class PolarPoint {
-      private float radius;
-      private float degrees;
-      private double radians;
-
-      public PolarPoint(float radius, float degrees) {
-        this.radius = radius;
-        this.degrees = degrees;
-        radians = Math.PI * this.degrees / 180;
-      }
-
-      public void increaseAngle(float degrees) {
-        this.degrees += degrees;
-        radians = (Math.PI * this.degrees) / 180;
-      }
-
-      public float getAngleDegrees() {
-        return degrees;
-      }
-
-      private float getX(int width) {
-        return (float) (Math.cos(radians) * (RADAR_INNER_RADIUS + radius
-            * width / 2));
-      }
-
-      private float getY(int width) {
-        return (float) (Math.sin(radians) * (RADAR_INNER_RADIUS + radius
-            * width / 2));
-      }
-
-      public void draw(float centreX, float centreY, int width, Canvas canvas) {
-        float x = getX(width);
-        float y = getY(width);
-        // Log.d(TAG, "Drawing point at " + x + ", " + y);
-        canvas.drawCircle(centreX + x, centreY - y, 2, mPointPaint);
-      }
-    }
+    private static final int STATE_READY = 0;
+    private static final int STATE_RUNNING = 1;
 
     /**
      * Current height of the surface/canvas.
@@ -88,24 +60,19 @@ public class GeneRadarView extends SurfaceView implements
      */
     private int mCanvasWidth = 1;
 
-    /**
-     * Current diameter of the radar.
-     *
-     * @see #setSurfaceSize
-     */
-    private int mRadarDiameter = 1;
-
     /** Used to figure out elapsed time between frames */
     private long mLastTime;
 
-    /** Used to figure out the total elapsed time since the beginning */
     private long mStartTime;
+    private float mCanvasOffset;
 
     /** Message handler used by thread to interact with TextView */
     private Handler mHandler;
 
     /** Indicate whether the surface has been created & is ready to draw */
     private boolean mRun = false;
+
+    private int mMode = STATE_READY;
 
     /** Handle to the surface manager object we interact with */
     private SurfaceHolder mSurfaceHolder;
@@ -123,7 +90,21 @@ public class GeneRadarView extends SurfaceView implements
 
     private Paint mBackgroundPaint;
 
-    private Deque<PolarPoint> mPoints;
+    private Paint mSelectionPaint;
+
+    /**
+     * Points to draw on the canvas as paris of float. X followed by Y
+     * coordinate.
+     */
+    private float[] mPoints;
+
+    /** Selections the user has entered already */
+    private List<Selection> mSelections;
+
+    /** Maintained while the user is dragging and creating a new Selection */
+    private Selection mSelectionInProgress;
+
+    private int mPointsOffset = 0;
 
     public GeneRadarThread(SurfaceHolder surfaceHolder, Context context,
         Handler handler) {
@@ -131,8 +112,6 @@ public class GeneRadarView extends SurfaceView implements
       mSurfaceHolder = surfaceHolder;
       mHandler = handler;
       mContext = context;
-
-      mPoints = new LinkedList<PolarPoint>();
 
       Resources res = context.getResources();
       // cache handles to our key sprites & other drawables
@@ -156,29 +135,23 @@ public class GeneRadarView extends SurfaceView implements
       mLinePaint = new Paint();
       mLinePaint.setAntiAlias(true);
       mLinePaint.setARGB(255, 0, 255, 0);
-      //
-      // mLinePaintBad = new Paint();
-      // mLinePaintBad.setAntiAlias(true);
-      // mLinePaintBad.setARGB(255, 120, 180, 0);
-      //
+
       mPointPaint = new Paint();
-      mPointPaint.setAntiAlias(true);
+      // mPointPaint.setAntiAlias(true);
+      mPointPaint.setStrokeWidth(4);
       mPointPaint.setColor(res.getColor(android.R.color.holo_blue_light));
 
       mBackgroundPaint = new Paint();
       mBackgroundPaint.setAntiAlias(true);
       mBackgroundPaint.setColor(res.getColor(android.R.color.background_light));
 
+      mSelectionPaint = new Paint();
+      mSelectionPaint.setStrokeWidth(10);
+      mSelectionPaint.setColor(res.getColor(android.R.color.holo_red_dark));
+
       mScratchRect = new RectF(0, 0, 0, 0);
 
-      // initial show-up of lander (not yet playing)
-      // mX = mLanderWidth;
-      // mY = mLanderHeight * 2;
-      // mFuel = PHYS_FUEL_INIT;
-      // mDX = 0;
-      // mDY = 0;
-      // mHeading = 0;
-      // mEngineFiring = true;
+      mSelections = new LinkedList<Selection>();
     }
 
     @Override
@@ -188,9 +161,12 @@ public class GeneRadarView extends SurfaceView implements
         try {
           c = mSurfaceHolder.lockCanvas(null);
           synchronized (mSurfaceHolder) {
-            // if (mMode == STATE_RUNNING)
-            updatePhysics();
-            doDraw(c);
+            if (mMode == STATE_RUNNING) {
+              updatePhysics();
+            }
+            if (mRun && mMode == STATE_RUNNING) {
+              doDraw(c);
+            }
           }
         } finally {
           // do this in a finally so that if an exception is thrown
@@ -220,11 +196,16 @@ public class GeneRadarView extends SurfaceView implements
     public void setSurfaceSize(int width, int height) {
       // synchronized to make sure these all change atomically
       synchronized (mSurfaceHolder) {
+        // int oldWidth = mCanvasWidth;
+        // int oldHeight = mCanvasHeight;
         mCanvasWidth = width;
         mCanvasHeight = height;
-        int smallerSize = mCanvasHeight < mCanvasWidth ? mCanvasHeight
-            : mCanvasWidth;
-        mRadarDiameter = smallerSize - RADAR_MARGIN * 2;
+
+        // for (int i = mPointsOffset; i < mPoints.length; i++) {
+        // mPoints[i] = (mPoints[i] / oldWidth) * width;
+        // i++;
+        // mPoints[i] = (mPoints[i] / oldHeight) * height;
+        // }
 
         // don't forget to resize the background image
         // mBackgroundImage = Bitmap.createScaledBitmap(mBackgroundImage, width,
@@ -246,28 +227,31 @@ public class GeneRadarView extends SurfaceView implements
       if (mLastTime > now)
         return;
 
-      float elapsed = (now - mLastTime) / 1000.0f;
-      float elapsedSinceStart = (now - mStartTime) / 1000.0f;
+      float elapsedTimeSinceStart = (now - mStartTime) / 1000.0f;
+      mCanvasOffset = elapsedTimeSinceStart * TIME_MULTIPLIER;
 
-      for (PolarPoint point : mPoints) {
-        float oldAngle = point.getAngleDegrees();
-        float newAngle = oldAngle + elapsed * TIME_MULTIPLIER;
-        if (newAngle >= START_DEGREES) {
-          point.increaseAngle(elapsed * TIME_MULTIPLIER);
+      float x;
+      for (int i = mPointsOffset; i < mPoints.length - 1; i += 2) {
+        x = mCanvasWidth - mCanvasOffset + mPoints[i] * POS_CONVERSION_FACTOR;
+        if (x < 0) {
+          mPointsOffset += 2;
         } else {
-          if ((oldAngle + elapsedSinceStart * TIME_MULTIPLIER) >= START_DEGREES) {
-            point.increaseAngle(elapsedSinceStart * TIME_MULTIPLIER);
-          } else {
-            break;
-          }
+          break;
         }
-        // Log.d(TAG, "Angle: " + oldAngle + " --> " + point.getAngleDegrees());
       }
 
-      while (!mPoints.isEmpty()
-          && mPoints.peek().getAngleDegrees() > START_DEGREES + SWEEP_DEGREES) {
-        mPoints.pop();
+      if (mPointsOffset > mPoints.length - 1) {
+        // We ran out of stuff to show
+        setRunning(false);
+        mMode = STATE_READY;
+        Message msg = mHandler.obtainMessage();
+        Bundle b = new Bundle();
+        b.putInt("action", ACTION_FINISH);
+        msg.setData(b);
+        mHandler.sendMessage(msg);
       }
+
+      mLastTime = now;
 
       // mRotating -- update heading
       // if (mRotating != 0) {
@@ -321,7 +305,6 @@ public class GeneRadarView extends SurfaceView implements
       // mX += elapsed * (mDX + dxOld) / 2;
       // mY += elapsed * (mDY + dyOld) / 2;
       //
-      mLastTime = now;
       //
       // // Evaluate if we have landed ... stop the game
       // double yLowerBound = TARGET_PAD_HEIGHT + mLanderHeight / 2
@@ -366,34 +349,33 @@ public class GeneRadarView extends SurfaceView implements
      * Draws the ship, fuel/speed bars, and background to the provided Canvas.
      */
     private void doDraw(Canvas canvas) {
-      float polarCentreX = mCanvasWidth / 2;
-      float polarCentreY = mCanvasHeight / 2;
-      int radarWidth = mRadarDiameter - RADAR_INNER_RADIUS;
-
       // Draw the background image. Operations on the Canvas accumulate
       // so this is like clearing the screen.
       // canvas.drawBitmap(mBackgroundImage, 0, 0, null);
       canvas.drawPaint(mBackgroundPaint);
 
-      // Green wedge
-      int wedgeDiameter = RADAR_INNER_RADIUS + (radarWidth / 2);
-      int left = (mCanvasWidth - wedgeDiameter) / 2;
-      int top = (mCanvasHeight - wedgeDiameter) / 2;
-      mScratchRect.set(left, top, left + wedgeDiameter, top + wedgeDiameter);
-      canvas.drawArc(mScratchRect, 120, 300, true, mLinePaint);
-
-      // Smaller wedge of background color to make a green arc
-      wedgeDiameter -= 6;
-      left = left + 3;
-      top = top + 3;
-      mScratchRect.set(left, top, left + wedgeDiameter, top + wedgeDiameter);
-      canvas.drawArc(mScratchRect, 120, 300, true, mBackgroundPaint);
-
-      for (PolarPoint point : mPoints) {
-        if (point.getAngleDegrees() > START_DEGREES) {
-          point.draw(polarCentreX, polarCentreY, radarWidth, canvas);
+      float x, y;
+      for (int i = mPointsOffset; i < mPoints.length - 1; i += 2) {
+        x = mCanvasWidth - mCanvasOffset + mPoints[i] * POS_CONVERSION_FACTOR;
+        y = mPoints[i + 1] * mCanvasHeight;
+        if (x > mCanvasWidth) {
+          break;
         }
+        canvas.drawPoint(x, y, mPointPaint);
       }
+
+      int score = 0;
+      for (int i = 0; i < mSelections.size(); i++) {
+        Selection selection = mSelections.get(i);
+        drawSelection(canvas, selection);
+        score += selection.endOffset - selection.startOffset;
+      }
+      Message msg = mHandler.obtainMessage();
+      Bundle b = new Bundle();
+      b.putInt("action", ACTION_SCORE);
+      b.putInt("score", score);
+      msg.setData(b);
+      mHandler.sendMessage(msg);
 
       // Draw the fuel gauge
       // int UI_BAR = 100;
@@ -446,6 +428,21 @@ public class GeneRadarView extends SurfaceView implements
       canvas.restore();
     }
 
+    private void drawSelection(Canvas canvas, Selection selection) {
+      float startX = mCanvasWidth - mCanvasOffset + selection.startOffset;
+      float endX = mCanvasWidth - mCanvasOffset + selection.endOffset;
+      if (startX < mCanvasWidth || endX > 0) {
+        float Y = selection.height * mCanvasHeight;
+        float mirrorY = (1 - selection.height) * mCanvasHeight;
+        canvas.drawLine(startX, Y, endX, Y, mSelectionPaint);
+        canvas.drawLine(startX, mirrorY, endX, mirrorY, mSelectionPaint);
+      }
+    }
+
+    public void setPoints(float[] points) {
+      mPoints = points;
+    }
+
     /**
      * Starts the game, setting parameters for the current difficulty.
      */
@@ -453,66 +450,66 @@ public class GeneRadarView extends SurfaceView implements
       synchronized (mSurfaceHolder) {
         mLastTime = System.currentTimeMillis() + 100;
         mStartTime = mLastTime;
-        // setState(STATE_RUNNING);
-
-        readAllThePoints();
+        mMode = STATE_RUNNING;
       }
     }
 
-    private void readAllThePoints() {
-      BufferedReader reader = new BufferedReader(new InputStreamReader(mContext
-          .getResources().openRawResource(R.raw.chrom1)));
-      try {
-        String line = reader.readLine();
-        float firstPos = -1;
-        // Pattern pattern =
-        // Pattern.compile("([0-9]+)\\s+([0-9]+)\\s+([0-9\\.]+)");
-        Pattern splitter = Pattern.compile("\\s+");
-        while (line != null) {
-          // //Log.d(TAG, "Trying to match on: " + line);
-          // Matcher match = pattern.matcher(line);
-          String[] groups = splitter.split(line);
-          // long pos = Long.parseLong(match.group(2));
-          // float value = Float.parseFloat(match.group(3));
-          long pos = Long.parseLong(groups[1]);
-          float value = Float.parseFloat(groups[2]);
-          if (firstPos == -1) {
-            firstPos = pos;
-          }
-          pos -= firstPos;
-          // //Log.d(TAG, "Adding point for pos " + pos + " value " + value);
-          mPoints.addLast(new PolarPoint(value, START_DEGREES
-              - (pos * POS_TO_DEGREE_CONVERSION_FACTOR)));
-          line = reader.readLine();
-        }
-      } catch (IOException e) {
-        Log.e(TAG, "Exception reading data file", e);
-      } finally {
-        try {
-          reader.close();
-        } catch (IOException e) {
-          Log.e(TAG, "Exception closing the reader", e);
-        }
+    public boolean doTouchEvent(MotionEvent event) {
+      // Log.d(TAG, "doTouchEvent. event: " + event.toString());
+      float x = event.getX();
+      float y = event.getY() - 10;
+      if (x < 0 || y < 0 || x > mCanvasWidth || y > mCanvasHeight) {
+        return false;
       }
+      float offset = mCanvasOffset - mCanvasWidth + x;
+      float height = y / mCanvasHeight;
+      // Log.d(TAG, "doTouchEvent. offset: " + offset + " height: " + height);
+      switch (event.getAction()) {
+      case MotionEvent.ACTION_DOWN:
+        // Log.d(TAG, "doTouchEvent. ACTION_DOWN");
+        mSelectionInProgress = new Selection(offset, offset, height);
+        mSelections.add(mSelectionInProgress);
+        break;
+      case MotionEvent.ACTION_MOVE:
+        // Log.d(TAG, "doTouchEvent. ACTION_MOVE");
+        mSelectionInProgress.endOffset = offset;
+        break;
+      case MotionEvent.ACTION_UP:
+        // Log.d(TAG, "doTouchEvent. ACTION_UP");
+        mSelectionInProgress.endOffset = offset;
+        mSelectionInProgress = null;
+        break;
+      default:
+        return false;
+      }
+      return true;
     }
 
   }
 
-  private Context context;
-  private GeneRadarThread thread;
+  private GeneRadarThread mThread;
+  private Callback mCallback;
 
   public GeneRadarView(Context context, AttributeSet attrs) {
     super(context, attrs);
-    this.context = context;
 
     SurfaceHolder holder = getHolder();
     holder.addCallback(this);
 
-    thread = new GeneRadarThread(holder, context, new Handler() {
+    mThread = new GeneRadarThread(holder, context, new Handler() {
       @Override
       public void handleMessage(Message m) {
-        // mStatusText.setVisibility(m.getData().getInt("viz"));
-        // mStatusText.setText(m.getData().getString("text"));
+        int action = m.getData().getInt("action");
+        switch(action) {
+        case ACTION_SCORE:
+          if (mCallback != null)
+            mCallback.updateScore(m.getData().getInt("score"));
+          break;
+        case ACTION_FINISH:
+          if (mCallback != null)
+            mCallback.endGame();
+          break;
+        }
       }
     });
   }
@@ -524,15 +521,15 @@ public class GeneRadarView extends SurfaceView implements
   public void surfaceCreated(SurfaceHolder holder) {
     // start the thread here so that we don't busy-wait in run()
     // waiting for the surface to be created
-    thread.setRunning(true);
-    thread.start();
+    mThread.setRunning(true);
+    mThread.start();
   }
 
   /* Callback invoked when the surface dimensions change. */
   @Override
   public void surfaceChanged(SurfaceHolder holder, int format, int width,
       int height) {
-    thread.setSurfaceSize(width, height);
+    mThread.setSurfaceSize(width, height);
   }
 
   /*
@@ -545,14 +542,20 @@ public class GeneRadarView extends SurfaceView implements
     // we have to tell thread to shut down & wait for it to finish, or else
     // it might touch the Surface after we return and explode
     boolean retry = true;
-    thread.setRunning(false);
+    mThread.setRunning(false);
     while (retry) {
       try {
-        thread.join();
+        mThread.join();
         retry = false;
       } catch (InterruptedException e) {
       }
     }
+  }
+
+  @Override
+  public boolean onTouchEvent(MotionEvent event) {
+    // Log.d(TAG, "onTouchEvent. event: " + event.toString());
+    return mThread.doTouchEvent(event);
   }
 
   /**
@@ -561,7 +564,15 @@ public class GeneRadarView extends SurfaceView implements
    * @return the animation thread
    */
   public GeneRadarThread getThread() {
-    return thread;
+    return mThread;
   }
 
+  public void setCallback(Callback callback) {
+    mCallback = callback;
+  }
+
+  public static interface Callback {
+    public void updateScore(int newScore);
+    public void endGame();
+  }
 }
