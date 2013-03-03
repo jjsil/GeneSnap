@@ -32,7 +32,7 @@ public class GeneRadarView extends SurfaceView implements
     private static final float MIDDLE_SNAP_WIDTH = 0.05f;
     private static final float FAT_ANIMATION_LENGTH = 400;
     private static final float FAT_LINE_CANVAS_HEIGHT_PORTION = 0.07f;
-    private static final float LINE_WIDTH_FOR_SCORE = 0.02f;
+    private static final float LINE_WIDTH_FOR_SCORE = 0.028f;
 
     private static float ALPHA_BASE = 0.3f;
     private static float ALPHA_1_SCORE = 0.7f;
@@ -134,26 +134,26 @@ public class GeneRadarView extends SurfaceView implements
         // No intersection
         return null;
       }
-      Log.v(TAG, "intersectInPlace: (" + startOffset + ", " + endOffset + ") (" + lineThatLoses.startOffset + ", " + lineThatLoses.endOffset + ")");
+//      Log.v(TAG, "intersectInPlace: (" + startOffset + ", " + endOffset + ") (" + lineThatLoses.startOffset + ", " + lineThatLoses.endOffset + ")");
       if (lineThatLoses.startOffset < startOffset && lineThatLoses.endOffset < endOffset) {
-        Log.v(TAG, "Case 1");
+//        Log.v(TAG, "Case 1");
         lineThatLoses.endOffset = startOffset;
         return null;
       }
       if (lineThatLoses.startOffset > startOffset && lineThatLoses.endOffset > endOffset) {
-        Log.v(TAG, "Case 2");
+//        Log.v(TAG, "Case 2");
         lineThatLoses.startOffset = endOffset;
         return null;
       }
       if (lineThatLoses.startOffset > startOffset && lineThatLoses.endOffset < endOffset) {
-        Log.v(TAG, "Case 3");
-        Log.v(TAG, "killing the line");
+//        Log.v(TAG, "Case 3");
+//        Log.v(TAG, "killing the line");
         // The line "dissapears"
         lineThatLoses.startOffset = endOffset;
         lineThatLoses.endOffset = endOffset;
         return null;
       } else {
-        Log.v(TAG, "Case 4");
+//        Log.v(TAG, "Case 4");
         // Split the line
         Selection rightRemainder = new Selection(
             endOffset, lineThatLoses.endOffset, lineThatLoses.height, pointsArrayOffset);
@@ -580,6 +580,10 @@ public class GeneRadarView extends SurfaceView implements
         mLastTime = System.currentTimeMillis() + 100;
         mStartTime = mLastTime;
         mMode = STATE_RUNNING;
+        mCanvasOffset = 0;
+        mSelections.clear();
+        mSelectionInProgress = null;
+        mPointsOffset = 0;
       }
     }
 
@@ -643,13 +647,25 @@ public class GeneRadarView extends SurfaceView implements
 
   private GeneRadarThread mThread;
   private Callback mCallback;
+  private Context context;
 
   public GeneRadarView(Context context, AttributeSet attrs) {
     super(context, attrs);
 
+    this.context = context;
+
     SurfaceHolder holder = getHolder();
     holder.addCallback(this);
 
+//    newThread(context, holder);
+  }
+
+  public GeneRadarThread newThread() {
+    newThread(context, getHolder());
+    return mThread;
+  }
+
+  private void newThread(Context context, SurfaceHolder holder) {
     mThread = new GeneRadarThread(holder, context, new Handler() {
       @Override
       public void handleMessage(Message m) {

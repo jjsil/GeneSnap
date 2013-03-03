@@ -39,13 +39,28 @@
             android:layout_height="wrap_content" />
     </LinearLayout>
 
+    <ImageView 
+        android:id="@+id/splash"
+        android:layout_toRightOf="@id/filler"
+        android:layout_alignParentTop="true"
+        android:src="@drawable/genesnapsplash"
+        android:contentDescription="Splash screen"
+        android:layout_marginLeft="20dp"
+        android:layout_marginRight="20dp"
+        android:layout_marginTop="20dp"
+        android:scaleType="centerInside"
+        android:layout_width="fill_parent"
+        android:layout_height="wrap_content" />
+    
     <TextView
         android:id="@+id/loading_txt"
         android:layout_width="fill_parent"
         android:layout_height="fill_parent"
         android:layout_margin="20dp"
         android:layout_toRightOf="@id/filler"
+        android:layout_below="@id/splash"
         android:gravity="center"
+        android:clickable="true"
         android:text="@string/loading"
         android:textSize="40sp" />
 

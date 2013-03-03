@@ -18,6 +18,8 @@ import android.os.Bundle;
 import android.util.Log;
 import android.view.Menu;
 import android.view.View;
+import android.view.View.OnClickListener;
+import android.widget.ImageView;
 import android.widget.TextView;
 
 public class MainActivity extends Activity implements GeneRadarView.Callback {
@@ -27,9 +29,13 @@ public class MainActivity extends Activity implements GeneRadarView.Callback {
   private TextView mLoadingView;
   private TextView mScoreView;
   private TextView mHighScoreView;
+  private ImageView mSplashView;
 
   private int score = 0;
   private int highScore;
+  private float[] mPoints;
+
+  private boolean readyToPlay = false;
 
   private static final int LOADER_ID_POINTS = 1;
 
@@ -48,13 +54,22 @@ public class MainActivity extends Activity implements GeneRadarView.Callback {
     highScore = prefs.getInt(PREF_HIGH_SCORE, 0);
 
     mGeneRadarView = (GeneRadarView) findViewById(R.id.radar);
-    mGeneRadarThread = mGeneRadarView.getThread();
+//    mGeneRadarThread = mGeneRadarView.getThread();
     mLoadingView = (TextView) findViewById(R.id.loading_txt);
     mScoreView = (TextView) findViewById(R.id.score_txt);
     mHighScoreView = (TextView) findViewById(R.id.high_score_txt);
     mHighScoreView.setText("" + highScore);
+    mSplashView = (ImageView) findViewById(R.id.splash);
 
     mGeneRadarView.setCallback(this);
+
+    mLoadingView.setOnClickListener(new OnClickListener() {
+      @Override
+      public void onClick(View v) {
+        if (readyToPlay)
+          start();
+      }
+    });
 
     if (savedInstanceState == null) {
       // we were just launched: set up a new game
@@ -92,12 +107,15 @@ public class MainActivity extends Activity implements GeneRadarView.Callback {
                     String[] groups = splitter.split(line);
                     float pos = Float.parseFloat(groups[1]);
                     float value = Float.parseFloat(groups[2]);
-                    if (value >= POINT_VALUE_TRIM && value <= 1 - POINT_VALUE_TRIM) {
+                    if (value >= POINT_VALUE_TRIM
+                        && value <= 1 - POINT_VALUE_TRIM) {
+                      value = (value - 0.15f) / 0.7f;
                       if (firstPos == -1) {
                         firstPos = pos;
                       }
                       pos -= firstPos;
-                      // //Log.d(TAG, "Adding point for pos " + pos + " value " +
+                      // //Log.d(TAG, "Adding point for pos " + pos + " value "
+                      // +
                       // value);
                       points.add(pos);
                       points.add(value);
@@ -125,10 +143,8 @@ public class MainActivity extends Activity implements GeneRadarView.Callback {
 
           @Override
           public void onLoadFinished(Loader<float[]> arg0, float[] arg1) {
-            mLoadingView.setVisibility(View.GONE);
-            mGeneRadarView.setVisibility(View.VISIBLE);
-            mGeneRadarThread.setPoints(arg1);
-            mGeneRadarThread.doStart();
+            mPoints = arg1;
+            start();
           }
 
           @Override
@@ -138,6 +154,17 @@ public class MainActivity extends Activity implements GeneRadarView.Callback {
 
         });
 
+  }
+
+  private void start() {
+    mLoadingView.setVisibility(View.GONE);
+    mSplashView.setVisibility(View.GONE);
+    mGeneRadarThread = mGeneRadarView.newThread();
+    mGeneRadarThread.setPoints(mPoints);
+    mGeneRadarThread.doStart();
+    mGeneRadarView.setVisibility(View.VISIBLE);
+
+    readyToPlay = false;
   }
 
   @Override
@@ -155,17 +182,20 @@ public class MainActivity extends Activity implements GeneRadarView.Callback {
 
   @Override
   public void endGame() {
-    String text = "You finished! Well Done!!";
+    String text = "You finished! Well Done!!\n(click to try again)";
     if (score >= highScore) {
       highScore = score;
-      text = "HIGH SCORE!!!!!!111one";
+      text = "HIGH SCORE!!!!!!111one\n(click to try again)";
       mHighScoreView.setText("" + highScore);
-      SharedPreferences.Editor prefsEditor = getPreferences(MODE_PRIVATE).edit();
+      SharedPreferences.Editor prefsEditor = getPreferences(MODE_PRIVATE)
+          .edit();
       prefsEditor.putInt(PREF_HIGH_SCORE, highScore);
       prefsEditor.commit();
     }
     mGeneRadarView.setVisibility(View.GONE);
     mLoadingView.setVisibility(View.VISIBLE);
     mLoadingView.setText(text);
+
+    readyToPlay = true;
   }
 }
