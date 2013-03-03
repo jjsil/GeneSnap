@@ -1,5 +1,6 @@
 package org.cruk.genesnap;
 
+import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 
@@ -12,6 +13,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
 import android.util.AttributeSet;
+import android.util.Log;
 import android.view.MotionEvent;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
@@ -24,27 +26,153 @@ public class GeneRadarView extends SurfaceView implements
   private static final int ACTION_SCORE = 1;
   private static final int ACTION_FINISH = 2;
 
-  private static class Selection {
-    public float startOffset;
-    public float endOffset;
-    public float height;
+  private static final float POS_CONVERSION_FACTOR = 0.00002f;
 
-    public Selection(float startOffset, float endOffset, float height) {
+  private static class Selection {
+    private static final float MIDDLE_SNAP_WIDTH = 0.05f;
+    private static final float FAT_ANIMATION_LENGTH = 400;
+    private static final float FAT_LINE_CANVAS_HEIGHT_PORTION = 0.07f;
+    private static final float LINE_WIDTH_FOR_SCORE = 0.02f;
+
+    private static float ALPHA_BASE = 0.3f;
+    private static float ALPHA_1_SCORE = 0.7f;
+
+    public float startOffset;
+    public final float height;
+    public float endOffset;
+    public long fatStartTime;
+    public float score;
+    /**
+     * The value of mPoinsOffset when the selection was created.
+     * Used to reduce the number of points we go through when calculating a score
+     * for this selection.
+     */
+    public final int pointsArrayOffset;
+
+    public Selection(float startOffset, float endOffset, float height, int pointsArrayOffset) {
       super();
-      this.startOffset = startOffset;
-      this.endOffset = endOffset;
+      if (startOffset <= endOffset) {
+        this.startOffset = startOffset;
+        this.endOffset = endOffset;
+      } else {
+        this.startOffset = endOffset;
+        this.endOffset = startOffset;
+      }
+      this.pointsArrayOffset = pointsArrayOffset;
+      if (height > 0.5 - MIDDLE_SNAP_WIDTH && height < 0.5 + MIDDLE_SNAP_WIDTH) {
+        height = 0.5f;
+      }
       this.height = height;
+      fatStartTime = -1;
+      score = 1;
+    }
+
+    private void draw(float canvasOffset, Canvas canvas, Paint originalPaint) {
+      Paint paint = new Paint(originalPaint);
+      // Main line
+      int canvasWidth = canvas.getWidth();
+      int canvasHeight = canvas.getHeight();
+      float startX = canvasWidth - canvasOffset + startOffset;
+      float endX = canvasWidth - canvasOffset + endOffset;
+      if (!(startX < canvasWidth || endX > 0)) {
+        // Off-canvas
+        return;
+      }
+      float Y = height * canvasHeight;
+      float mirrorY = (1 - height) * canvasHeight;
+      paint.setAlpha(Math.round(0xFF * Math.min(1, Math.max(ALPHA_BASE, score / ALPHA_1_SCORE))));
+      canvas.drawLine(startX, Y, endX, Y, paint);
+      if (Y != mirrorY) {
+        canvas.drawLine(startX, mirrorY, endX, mirrorY, paint);
+      }
+
+      // Fat line
+      if (fatStartTime != -1) {
+        long now = System.currentTimeMillis();
+        long elapsedTime = now - fatStartTime;
+        if (elapsedTime > FAT_ANIMATION_LENGTH) {
+          // We are done animating
+          fatStartTime = -1;
+        } else {
+          double animationPortion = 1 - Math.pow(1 - elapsedTime / FAT_ANIMATION_LENGTH, 2);
+          Paint fatPaint = new Paint(originalPaint);
+          fatPaint.setStrokeWidth((float) (paint.getStrokeWidth() + canvasWidth * FAT_LINE_CANVAS_HEIGHT_PORTION * animationPortion));
+          fatPaint.setAlpha((int) (1 - (255 * animationPortion)));
+          canvas.drawLine(startX, Y, endX, Y, fatPaint);
+          if (Y != mirrorY) {
+            canvas.drawLine(startX, mirrorY, endX, mirrorY, fatPaint);
+          }
+        }
+      }
+    }
+
+    public int calculateScore(float[] points) {
+      int intersectCount = 0;
+      for (int i = pointsArrayOffset; i < points.length - 1; i += 2) {
+        float pos = points[i] * POS_CONVERSION_FACTOR;
+        float value = points[i + 1];
+        if (pos < startOffset) {
+          continue;
+        }
+        if (pos > endOffset) {
+          break;
+        }
+        if (Math.abs(value - height) < LINE_WIDTH_FOR_SCORE) {
+          intersectCount++;
+        }
+      }
+      score = intersectCount / length();
+      return intersectCount;
+    }
+
+    public float length() {
+      return (endOffset - startOffset);
+    }
+
+    public Selection intersectInPlace(Selection lineThatLoses) {
+      if (lineThatLoses.startOffset >= endOffset || lineThatLoses.endOffset <= startOffset) {
+        // No intersection
+        return null;
+      }
+      Log.v(TAG, "intersectInPlace: (" + startOffset + ", " + endOffset + ") (" + lineThatLoses.startOffset + ", " + lineThatLoses.endOffset + ")");
+      if (lineThatLoses.startOffset < startOffset && lineThatLoses.endOffset < endOffset) {
+        Log.v(TAG, "Case 1");
+        lineThatLoses.endOffset = startOffset;
+        return null;
+      }
+      if (lineThatLoses.startOffset > startOffset && lineThatLoses.endOffset > endOffset) {
+        Log.v(TAG, "Case 2");
+        lineThatLoses.startOffset = endOffset;
+        return null;
+      }
+      if (lineThatLoses.startOffset > startOffset && lineThatLoses.endOffset < endOffset) {
+        Log.v(TAG, "Case 3");
+        Log.v(TAG, "killing the line");
+        // The line "dissapears"
+        lineThatLoses.startOffset = endOffset;
+        lineThatLoses.endOffset = endOffset;
+        return null;
+      } else {
+        Log.v(TAG, "Case 4");
+        // Split the line
+        Selection rightRemainder = new Selection(
+            endOffset, lineThatLoses.endOffset, lineThatLoses.height, pointsArrayOffset);
+        lineThatLoses.endOffset = startOffset;
+        return rightRemainder;
+      }
     }
   }
 
   static class GeneRadarThread extends Thread {
 
-    private static final int TIME_MULTIPLIER = 70;
+    private static final int TIME_MULTIPLIER = 120;
 
-    private static final float POS_CONVERSION_FACTOR = 0.00002f;
 
     private static final int STATE_READY = 0;
     private static final int STATE_RUNNING = 1;
+
+    private static final int[] POINT_RGB_EDGE = {0xFF, 0, 0};
+    private static final int[] POINT_RGB_MIDDLE = {0, 0, 0xFF};
 
     /**
      * Current height of the surface/canvas.
@@ -91,6 +219,7 @@ public class GeneRadarView extends SurfaceView implements
     private Paint mBackgroundPaint;
 
     private Paint mSelectionPaint;
+    private Paint mActiveSelectionPaint;
 
     /**
      * Points to draw on the canvas as paris of float. X followed by Y
@@ -147,7 +276,11 @@ public class GeneRadarView extends SurfaceView implements
 
       mSelectionPaint = new Paint();
       mSelectionPaint.setStrokeWidth(10);
-      mSelectionPaint.setColor(res.getColor(android.R.color.holo_red_dark));
+      mSelectionPaint.setARGB(0xFF, 0xFF, 0x00, 0xFF);
+
+      mActiveSelectionPaint = new Paint();
+      mActiveSelectionPaint.setStrokeWidth(10);
+      mActiveSelectionPaint.setARGB(0xFF, 0x5C, 0x26, 0xFF);
 
       mScratchRect = new RectF(0, 0, 0, 0);
 
@@ -361,14 +494,21 @@ public class GeneRadarView extends SurfaceView implements
         if (x > mCanvasWidth) {
           break;
         }
+        double colorMultiplier = Math.abs(mPoints[i + 1] - 0.5) / 0.5;
+        mPointPaint.setARGB(
+            0xFF,
+            Math.abs((int) (POINT_RGB_MIDDLE[0] + (POINT_RGB_EDGE[0] - POINT_RGB_MIDDLE[0]) * colorMultiplier)),
+            Math.abs((int) (POINT_RGB_MIDDLE[1] + (POINT_RGB_EDGE[1] - POINT_RGB_MIDDLE[1]) * colorMultiplier)),
+            Math.abs((int) (POINT_RGB_MIDDLE[2] + (POINT_RGB_EDGE[2] - POINT_RGB_MIDDLE[2]) * colorMultiplier)));
         canvas.drawPoint(x, y, mPointPaint);
       }
 
       int score = 0;
       for (int i = 0; i < mSelections.size(); i++) {
         Selection selection = mSelections.get(i);
-        drawSelection(canvas, selection);
-        score += selection.endOffset - selection.startOffset;
+        score += selection.calculateScore(mPoints);
+        selection.draw(mCanvasOffset, canvas,
+            selection == mSelectionInProgress ? mActiveSelectionPaint : mSelectionPaint);
       }
       Message msg = mHandler.obtainMessage();
       Bundle b = new Bundle();
@@ -428,17 +568,6 @@ public class GeneRadarView extends SurfaceView implements
       canvas.restore();
     }
 
-    private void drawSelection(Canvas canvas, Selection selection) {
-      float startX = mCanvasWidth - mCanvasOffset + selection.startOffset;
-      float endX = mCanvasWidth - mCanvasOffset + selection.endOffset;
-      if (startX < mCanvasWidth || endX > 0) {
-        float Y = selection.height * mCanvasHeight;
-        float mirrorY = (1 - selection.height) * mCanvasHeight;
-        canvas.drawLine(startX, Y, endX, Y, mSelectionPaint);
-        canvas.drawLine(startX, mirrorY, endX, mirrorY, mSelectionPaint);
-      }
-    }
-
     public void setPoints(float[] points) {
       mPoints = points;
     }
@@ -455,11 +584,11 @@ public class GeneRadarView extends SurfaceView implements
     }
 
     public boolean doTouchEvent(MotionEvent event) {
-      // Log.d(TAG, "doTouchEvent. event: " + event.toString());
+//       Log.d(TAG, "doTouchEvent. event: " + event.getAction());
       float x = event.getX();
       float y = event.getY() - 10;
       if (x < 0 || y < 0 || x > mCanvasWidth || y > mCanvasHeight) {
-        return false;
+//        return false;
       }
       float offset = mCanvasOffset - mCanvasWidth + x;
       float height = y / mCanvasHeight;
@@ -467,16 +596,41 @@ public class GeneRadarView extends SurfaceView implements
       switch (event.getAction()) {
       case MotionEvent.ACTION_DOWN:
         // Log.d(TAG, "doTouchEvent. ACTION_DOWN");
-        mSelectionInProgress = new Selection(offset, offset, height);
+        mSelectionInProgress = new Selection(offset, offset, height, mPointsOffset);
         mSelections.add(mSelectionInProgress);
         break;
       case MotionEvent.ACTION_MOVE:
         // Log.d(TAG, "doTouchEvent. ACTION_MOVE");
         mSelectionInProgress.endOffset = offset;
+        Selection rightRemainder = null;
+        for (Iterator<Selection> iterSelection = mSelections.iterator(); iterSelection.hasNext();) {
+          Selection selection = (Selection) iterSelection.next();
+          if (selection != mSelectionInProgress) {
+            Selection tmpRemainder = mSelectionInProgress.intersectInPlace(selection);
+            if (tmpRemainder != null) {
+              if (rightRemainder != null)
+                Log.w(TAG, "Two right remainders!!");
+              rightRemainder = tmpRemainder;
+            }
+            if (selection.length() == 0) {
+              iterSelection.remove();
+            }
+          }
+        }
+        if (rightRemainder != null) {
+          mSelections.add(rightRemainder);
+        }
         break;
       case MotionEvent.ACTION_UP:
-        // Log.d(TAG, "doTouchEvent. ACTION_UP");
+//         Log.d(TAG, "doTouchEvent. ACTION_UP");
         mSelectionInProgress.endOffset = offset;
+        mSelectionInProgress.fatStartTime = System.currentTimeMillis();
+        int score = mSelectionInProgress.calculateScore(mPoints);
+        float length = mSelectionInProgress.length();
+        Log.d(TAG, "new line score : " + score);
+        Log.d(TAG, "new line length: " + length);
+        Log.d(TAG, "new line ration: " + score / length);
+
         mSelectionInProgress = null;
         break;
       default:
@@ -500,7 +654,7 @@ public class GeneRadarView extends SurfaceView implements
       @Override
       public void handleMessage(Message m) {
         int action = m.getData().getInt("action");
-        switch(action) {
+        switch (action) {
         case ACTION_SCORE:
           if (mCallback != null)
             mCallback.updateScore(m.getData().getInt("score"));
@@ -573,6 +727,7 @@ public class GeneRadarView extends SurfaceView implements
 
   public static interface Callback {
     public void updateScore(int newScore);
+
     public void endGame();
   }
 }

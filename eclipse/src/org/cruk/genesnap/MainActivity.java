@@ -13,6 +13,7 @@ import android.app.Activity;
 import android.app.LoaderManager.LoaderCallbacks;
 import android.content.AsyncTaskLoader;
 import android.content.Loader;
+import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.Menu;
@@ -25,20 +26,33 @@ public class MainActivity extends Activity implements GeneRadarView.Callback {
   private GeneRadarThread mGeneRadarThread;
   private TextView mLoadingView;
   private TextView mScoreView;
+  private TextView mHighScoreView;
+
+  private int score = 0;
+  private int highScore;
 
   private static final int LOADER_ID_POINTS = 1;
 
+  private static final float POINT_VALUE_TRIM = 0.15f;
+
   private static final String TAG = MainActivity.class.getName();
+
+  private static final String PREF_HIGH_SCORE = "high_score";
 
   @Override
   protected void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
     setContentView(R.layout.activity_main);
 
+    SharedPreferences prefs = getPreferences(MODE_PRIVATE);
+    highScore = prefs.getInt(PREF_HIGH_SCORE, 0);
+
     mGeneRadarView = (GeneRadarView) findViewById(R.id.radar);
     mGeneRadarThread = mGeneRadarView.getThread();
     mLoadingView = (TextView) findViewById(R.id.loading_txt);
     mScoreView = (TextView) findViewById(R.id.score_txt);
+    mHighScoreView = (TextView) findViewById(R.id.high_score_txt);
+    mHighScoreView.setText("" + highScore);
 
     mGeneRadarView.setCallback(this);
 
@@ -78,14 +92,16 @@ public class MainActivity extends Activity implements GeneRadarView.Callback {
                     String[] groups = splitter.split(line);
                     float pos = Float.parseFloat(groups[1]);
                     float value = Float.parseFloat(groups[2]);
-                    if (firstPos == -1) {
-                      firstPos = pos;
+                    if (value >= POINT_VALUE_TRIM && value <= 1 - POINT_VALUE_TRIM) {
+                      if (firstPos == -1) {
+                        firstPos = pos;
+                      }
+                      pos -= firstPos;
+                      // //Log.d(TAG, "Adding point for pos " + pos + " value " +
+                      // value);
+                      points.add(pos);
+                      points.add(value);
                     }
-                    pos -= firstPos;
-                    // //Log.d(TAG, "Adding point for pos " + pos + " value " +
-                    // value);
-                    points.add(pos);
-                    points.add(value);
                     line = reader.readLine();
                   }
                   pointArray = new float[points.size()];
@@ -133,14 +149,23 @@ public class MainActivity extends Activity implements GeneRadarView.Callback {
 
   @Override
   public void updateScore(int newScore) {
+    score = newScore;
     mScoreView.setText("" + newScore);
   }
 
   @Override
   public void endGame() {
+    String text = "You finished! Well Done!!";
+    if (score >= highScore) {
+      highScore = score;
+      text = "HIGH SCORE!!!!!!111one";
+      mHighScoreView.setText("" + highScore);
+      SharedPreferences.Editor prefsEditor = getPreferences(MODE_PRIVATE).edit();
+      prefsEditor.putInt(PREF_HIGH_SCORE, highScore);
+      prefsEditor.commit();
+    }
     mGeneRadarView.setVisibility(View.GONE);
     mLoadingView.setVisibility(View.VISIBLE);
-    mLoadingView.setText("You finished! Well Done!!" +
-    		"!!\nYou had 90% overlap with your friend Joe");
+    mLoadingView.setText(text);
   }
 }
